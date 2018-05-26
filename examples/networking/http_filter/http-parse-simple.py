@@ -19,6 +19,7 @@ from sys import argv
 import sys
 import socket
 import os
+import struct
 
 #args
 def usage():
@@ -43,6 +44,29 @@ def help():
 #arguments
 interface="eth0"
 
+def getIP(index):
+    ip = ""
+    for i in range(index,index+8):
+        ip = ip + str(packet_hex[i])
+    a = ip.upper()
+    b = a.decode('hex')
+    c = b[::-1]
+    d = c.encode('hex')
+    addr_long = int(d,16)
+    ip = socket.inet_ntoa(struct.pack("<L", addr_long))
+    #print(ip)
+    return ip
+
+
+def toHex(s):
+    lst = []
+    for ch in s:
+        hv = hex(ord(ch)).replace('0x', '')
+        if len(hv) == 1:
+            hv = '0'+hv
+        lst.append(hv) 
+    return reduce(lambda x,y:x+y, lst)
+
 if len(argv) == 2:
   if str(argv[1]) == '-h':
     help()
@@ -57,6 +81,18 @@ if len(argv) == 3:
 
 if len(argv) > 3:
   usage()
+
+def getport(index, packet_hex):
+    port = ""
+    for i in range(index, index+4):
+        port = port + str(packet_hex[i])
+    #print(port)
+    a = port.upper()
+    b = a.decode('hex')
+    #c = b[::-1]
+    d = b.encode('hex')
+    port = int(d, 16)
+    return port
 
 print ("binding socket to '%s'" % interface)
 
@@ -80,12 +116,14 @@ sock = socket.fromfd(socket_fd,socket.PF_PACKET,socket.SOCK_RAW,socket.IPPROTO_I
 #set it as blocking socket
 sock.setblocking(True)
 
+print("Source IP    ", "Destination IP  ", "Source Port     ", "Destination Port    ", "URL     ")
+
 while 1:
   #retrieve raw packet from socket
   packet_str = os.read(socket_fd,2048)
 
   #DEBUG - print raw packet in hex format
-  #packet_hex = toHex(packet_str)
+  packet_hex = toHex(packet_str)
   #print ("%s" % packet_hex)
 
   #convert packet into bytearray
@@ -93,7 +131,27 @@ while 1:
 
   #ethernet header length
   ETH_HLEN = 14
-
+ 
+  #get start index for IP addresses
+  for i in range (ETH_HLEN+12,len(packet_hex)-1):
+      #print (packet_hex_array[i])
+      if [ i+1 > len(packet_hex)-1]:
+          if (str(packet_hex[i]+packet_hex[i+1]) == "0a"):
+              #print(" This is %s" %packet_hex[i])
+              index = i
+              break
+  
+  ipA = getIP(index)
+  ipB = getIP(index+8)
+  ip_header_length = 20 #see below
+  #port_index = ETH_HLEN + ip_header_length
+  #source port is first 2 bytes of TCP header
+  #destination port is the next 2 bytes of the TCP header
+  port_index = 68
+  portA = getport(port_index, packet_hex)
+  portB = getport(port_index+4, packet_hex)
+  #print(ipA, ipB,portA, portB)
+  
   #IP HEADER
   #https://tools.ietf.org/html/rfc791
   # 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -117,7 +175,8 @@ while 1:
   ip_header_length = packet_bytearray[ETH_HLEN]               #load Byte
   ip_header_length = ip_header_length & 0x0F                  #mask bits 0..3
   ip_header_length = ip_header_length << 2                    #shift to obtain length
-
+  
+  #print(ip_header_length)
   #TCP HEADER
   #https://www.rfc-editor.org/rfc/rfc793.txt
   #  12              13              14              15
@@ -137,17 +196,21 @@ while 1:
   tcp_header_length = packet_bytearray[ETH_HLEN + ip_header_length + 12]  #load Byte
   tcp_header_length = tcp_header_length & 0xF0                            #mask bit 4..7
   tcp_header_length = tcp_header_length >> 2                              #SHR 4 ; SHL 2 -> SHR 2
-
+  
   #calculate payload offset
   payload_offset = ETH_HLEN + ip_header_length + tcp_header_length
 
   #print first line of the HTTP GET/POST request
   #line ends with 0xOD 0xOA (\r\n)
   #(if we want to print all the header print until \r\n\r\n)
+  #print(packet_bytearray)
+  http = ""
   for i in range (payload_offset-1,len(packet_bytearray)-1):
     if (packet_bytearray[i]== 0x0A):
       if (packet_bytearray[i-1] == 0x0D):
         break
-    print ("%c" % chr(packet_bytearray[i]), end = "")
-  print("")
+    #print(ipA, ipB,portA, portB)
+    #print ("%c" % chr(packet_bytearray[i]), end = "")
+    http = http + chr(packet_bytearray[i])
+  print(ipA, "  ", ipB, "     ",  portA, "         ",  portB, "          ",  http)
 
